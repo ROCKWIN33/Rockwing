@@ -32,6 +32,10 @@ export default async function handler(req, res) {
     });
   }
 
+  if (!folder || folder.split("/").some(part => !part || part === "." || part === "..")) {
+    return res.status(500).json({error: "GITHUB_FOLDER must be a non-empty repository folder path."});
+  }
+
   const contentType = String(req.headers["content-type"] || "").split(";")[0].toLowerCase();
   if (contentType !== "image/jpeg") {
     return res.status(415).json({error: "Only JPEG photos are accepted."});
@@ -47,27 +51,36 @@ export default async function handler(req, res) {
   const maxBytes = 8 * 1024 * 1024;
   if (buffer.length === 0) return res.status(400).json({error: "Empty image."});
   if (buffer.length > maxBytes) return res.status(413).json({error: "Photo is larger than 8 MB."});
+  if (buffer[0] !== 0xff || buffer[1] !== 0xd8 || buffer[buffer.length - 2] !== 0xff || buffer[buffer.length - 1] !== 0xd9) {
+    return res.status(415).json({error: "The uploaded file is not a valid JPEG image."});
+  }
 
   const id = `SMILE-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
   const filename = `${id}.jpg`;
   const path = `${folder}/${filename}`;
   const apiUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
 
-  const githubResponse = await fetch(apiUrl, {
-    method: "PUT",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Accept": "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-      "User-Agent": "Smile-Photo-App"
-    },
-    body: JSON.stringify({
-      message: `Add Smile photo ${id}`,
-      content: buffer.toString("base64"),
-      branch
-    })
-  });
+  let githubResponse;
+  try {
+    githubResponse = await fetch(apiUrl, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "Smile-Photo-App"
+      },
+      body: JSON.stringify({
+        message: `Add Smile photo ${id}`,
+        content: buffer.toString("base64"),
+        branch
+      })
+    });
+  } catch (error) {
+    console.error("GitHub upload request failed:", error);
+    return res.status(502).json({error: "Could not reach GitHub to upload the photo. Please retry."});
+  }
 
   const githubData = await githubResponse.json().catch(() => ({}));
   if (!githubResponse.ok) {
