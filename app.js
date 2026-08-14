@@ -56,6 +56,7 @@
           <p>Enter the message your customer should see after scanning the QR code.</p>
           <textarea id="messageInput" maxlength="500" placeholder="Type your message here…"></textarea>
           <div class="counter"><span id="count">0</span>/500</div>
+          <div id="qrError" class="photo-status error hidden" role="alert"></div>
           <button id="generate" class="primary">Generate QR Code</button>
         </section>
 
@@ -96,6 +97,7 @@
     const input = document.getElementById("messageInput");
     const count = document.getElementById("count");
     const generate = document.getElementById("generate");
+    const qrError = document.getElementById("qrError");
     const newPhoto = document.getElementById("newPhoto");
     const shareQr = document.getElementById("shareQr");
     const qr = document.getElementById("qr");
@@ -281,21 +283,29 @@
         return;
       }
 
-      qr.innerHTML = "";
-      const url = buildCustomerUrl(text, uploadedPhotoUrl);
+      qrError.classList.add("hidden");
+      try {
+        qr.innerHTML = "";
+        const url = buildCustomerUrl(text, uploadedPhotoUrl);
 
-      new QRCode(qr, {
-        text: url,
-        width: 240,
-        height: 240,
-        colorDark: "#111827",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.M
-      });
+        // Keep a large source canvas for sharing; CSS scales it down for display.
+        new QRCode(qr, {
+          text: url,
+          width: 1024,
+          height: 1024,
+          colorDark: "#111827",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.M
+        });
 
-      preview.textContent = text;
-      qrStep.classList.remove("hidden");
-      qrStep.scrollIntoView({behavior: "smooth"});
+        preview.textContent = text;
+        qrStep.classList.remove("hidden");
+        qrStep.scrollIntoView({behavior: "smooth"});
+      } catch (e) {
+        console.error("QR generation failed:", e);
+        qrError.textContent = "This message is too long to fit in a scannable QR code. Please shorten it and try again.";
+        qrError.classList.remove("hidden");
+      }
     };
 
     shareQr.onclick = () => {
@@ -351,7 +361,8 @@
         }
 
         if (blob && navigator.share) {
-          const file = new File([blob], "smile-qr-code.png", {type: "image/png"});
+          const shareBlob = await addQuietZone(blob);
+          const file = new File([shareBlob], "smile-qr-code.png", {type: "image/png"});
           if (!navigator.canShare || navigator.canShare({files: [file]})) {
             await navigator.share({
               title: "Smile QR Code",
@@ -380,6 +391,23 @@
         console.error("QR sharing failed:", e);
         shareQr.textContent = "Share QR Code";
       }
+    }
+
+    // QR scanners need a white quiet zone. Bake it into the shared PNG because
+    // the visual padding around the on-page code is not included in an export.
+    async function addQuietZone(blob) {
+      const bitmap = await createImageBitmap(blob);
+      const margin = Math.round(Math.max(bitmap.width, bitmap.height) * 0.08);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width + margin * 2;
+      canvas.height = bitmap.height + margin * 2;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.imageSmoothingEnabled = false;
+      context.drawImage(bitmap, margin, margin);
+      bitmap.close?.();
+      return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
     }
 
     async function loadGallery() {
